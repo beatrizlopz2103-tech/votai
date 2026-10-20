@@ -1,7 +1,9 @@
-// js/eventos.js - Lógica Principal, Navegação e Performance
+// js/eventos.js - Lógica Principal, Interface e Interatividade
+
 var categoriaAtiva = 'todas';
 var textoBuscaAtivo = '';
 var modoAtualAuth = 'entrar';
+var timersAtivos = {};
 
 function validarEmail(email) {
   var re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -32,7 +34,7 @@ function mudarAbaAuth(tipo) {
     if (btnCriar) btnCriar.classList.add('active');
     if (btnEntrar) btnEntrar.classList.remove('active');
     if (titulo) titulo.textContent = 'Crie seu perfil';
-    if (subtitulo) subtitulo.textContent = 'Use seu perfil para participar das enquetes da turma.';
+    if (subtitulo) subtitulo.textContent = 'Cadastre-se para criar enquetes e sincronizar com a turma.';
     if (groupNome) groupNome.style.display = 'flex';
     if (groupTurma) groupTurma.style.display = 'flex';
     if (groupConfirma) groupConfirma.style.display = 'flex';
@@ -48,52 +50,133 @@ function configurarAuth() {
     exibirDashboard(usuarioLogado);
   }
 
+  // Botão para entrar como visitante sem necessidade de cadastro
+  var btnVisitante = document.getElementById('btn-auth-visitante');
+  if (btnVisitante) {
+    btnVisitante.addEventListener('click', function() {
+      var guestId = localStorage.getItem('votaai_guest_id');
+      if (!guestId) {
+        guestId = 'guest_' + Math.random().toString(36).substring(2, 8);
+        localStorage.setItem('votaai_guest_id', guestId);
+      }
+
+      var contaVisitante = {
+        nome: 'Visitante',
+        email: guestId + '@votaai.local',
+        turma: 'Visitante'
+      };
+
+      localStorage.setItem('votaai_usuario_logado', JSON.stringify(contaVisitante));
+      exibirDashboard(contaVisitante);
+    });
+  }
+
   if (formAuth) {
-    formAuth.addEventListener('submit', function(e) {
+    formAuth.addEventListener('submit', async function(e) {
       e.preventDefault();
-      var email = document.getElementById('auth-email').value.trim();
+      var email = document.getElementById('auth-email').value.trim().toLowerCase();
       var senha = document.getElementById('auth-senha').value.trim();
       var contas = JSON.parse(localStorage.getItem('votaai_contas')) || [];
+      var btnSubmit = document.getElementById('btn-auth-submit');
 
       if (!validarEmail(email)) {
-        alert('Por favor, digite um e-mail valido!');
+        alert('Por favor, digite um e-mail válido!');
         return;
       }
 
-      if (modoAtualAuth === 'criar') {
-        var nome = document.getElementById('auth-nome').value.trim();
-        var turma = document.getElementById('auth-turma').value.trim();
-        var confirma = document.getElementById('auth-confirma-senha').value.trim();
+      if (btnSubmit) {
+        btnSubmit.disabled = true;
+        btnSubmit.textContent = 'Aguarde...';
+      }
 
-        if (!nome || !email || !senha || !confirma) {
-          alert('Preencha todos os campos!');
-          return;
-        }
+      try {
+        if (modoAtualAuth === 'criar') {
+          var nome = document.getElementById('auth-nome').value.trim();
+          var turma = document.getElementById('auth-turma').value.trim();
+          var confirma = document.getElementById('auth-confirma-senha').value.trim();
 
-        if (senha !== confirma) {
-          alert('As senhas nao coincidem!');
-          return;
-        }
+          if (!nome || !email || !senha || !confirma) {
+            alert('Preencha todos os campos!');
+            return;
+          }
 
-        var existe = contas.find(function(c) { return c.email === email; });
-        if (existe) {
-          alert('Este e-mail ja esta cadastrado!');
-          return;
-        }
+          if (senha !== confirma) {
+            alert('As senhas não coincidem!');
+            return;
+          }
 
-        var novaConta = { nome: nome, email: email, turma: turma, senha: senha };
-        contas.push(novaConta);
-        localStorage.setItem('votaai_contas', JSON.stringify(contas));
-        localStorage.setItem('votaai_usuario_logado', JSON.stringify(novaConta));
+          // Se Firestore estiver disponível, verifica se o usuário já existe na nuvem
+          if (db) {
+            try {
+              var userDoc = await db.collection('usuarios').doc(email).get();
+              if (userDoc.exists) {
+                alert('Este e-mail já está cadastrado no sistema!');
+                return;
+              }
 
-        exibirDashboard(novaConta);
-      } else {
-        var contaEncontrada = contas.find(function(c) { return c.email === email && c.senha === senha; });
-        if (contaEncontrada) {
-          localStorage.setItem('votaai_usuario_logado', JSON.stringify(contaEncontrada));
-          exibirDashboard(contaEncontrada);
+              // Salva novo usuário no Firestore
+              await db.collection('usuarios').doc(email).set({
+                nome: nome,
+                email: email,
+                turma: turma,
+                senha: senha,
+                criadoEm: Date.now()
+              });
+            } catch (errDb) {
+              console.warn("Aviso ao salvar usuário no Firestore:", errDb);
+            }
+          } else {
+            var existe = contas.find(function(c) { return c.email === email; });
+            if (existe) {
+              alert('Este e-mail já está cadastrado!');
+              return;
+            }
+          }
+
+          var novaConta = { nome: nome, email: email, turma: turma, senha: senha };
+          contas.push(novaConta);
+          localStorage.setItem('votaai_contas', JSON.stringify(contas));
+          localStorage.setItem('votaai_usuario_logado', JSON.stringify(novaConta));
+
+          exibirDashboard(novaConta);
         } else {
-          alert('E-mail ou senha incorretos!');
+          // Modo Entrar
+          var usuarioAutenticado = null;
+
+          // Tenta autenticar via Firestore primeiro
+          if (db) {
+            try {
+              var userDoc = await db.collection('usuarios').doc(email).get();
+              if (userDoc.exists) {
+                var dadosUser = userDoc.data();
+                if (dadosUser.senha === senha) {
+                  usuarioAutenticado = dadosUser;
+                }
+              }
+            } catch (errDb) {
+              console.warn("Aviso ao buscar usuário no Firestore:", errDb);
+            }
+          }
+
+          // Se não encontrou no Firestore ou Firestore offline, busca nas contas locais
+          if (!usuarioAutenticado) {
+            var contaLocal = contas.find(function(c) { return c.email === email && c.senha === senha; });
+            if (contaLocal) {
+              usuarioAutenticado = contaLocal;
+            }
+          }
+
+          if (usuarioAutenticado) {
+            localStorage.setItem('votaai_usuario_logado', JSON.stringify(usuarioAutenticado));
+            exibirDashboard(usuarioAutenticado);
+          } else {
+            alert('E-mail ou senha incorretos!');
+          }
+        }
+      } finally {
+        if (btnSubmit) {
+          btnSubmit.disabled = false;
+          btnSubmit.textContent = (modoAtualAuth === 'criar' ? 'Criar minha conta' : 'Entrar');
         }
       }
     });
@@ -127,8 +210,8 @@ function exibirDashboard(usuario) {
 
   var elName = document.getElementById('sidebar-user-name');
   var elEmail = document.getElementById('sidebar-user-email');
-  if (elName) elName.textContent = usuario.nome;
-  if (elEmail) elEmail.textContent = usuario.email;
+  if (elName) elName.textContent = usuario.nome || 'Usuário';
+  if (elEmail) elEmail.textContent = usuario.email || '';
 
   var iniciais = usuario.nome ? usuario.nome.substring(0, 2).toUpperCase() : 'EU';
   var avatar = document.getElementById('user-avatar');
@@ -139,8 +222,8 @@ function exibirDashboard(usuario) {
   var inNome = document.getElementById('input-nome');
   var inEmail = document.getElementById('input-email');
   var inTurma = document.getElementById('input-turma');
-  if (inNome) inNome.value = usuario.nome;
-  if (inEmail) inEmail.value = usuario.email;
+  if (inNome) inNome.value = usuario.nome || '';
+  if (inEmail) inEmail.value = usuario.email || '';
   if (inTurma) inTurma.value = usuario.turma || '';
 
   aplicarFiltros();
@@ -187,9 +270,12 @@ function atualizarTelaResultados() {
 
   enquetes.forEach(function(e) {
     if (e.encerrada) totalEncerradas++;
-    e.opcoes.forEach(function(op) {
-      totalVotos += op.votos;
-      if (votosPorCat[e.categoria] !== undefined) votosPorCat[e.categoria] += op.votos;
+    (e.opcoes || []).forEach(function(op) {
+      var qtd = Number(op.votos) || 0;
+      totalVotos += qtd;
+      if (votosPorCat[e.categoria] !== undefined) {
+        votosPorCat[e.categoria] += qtd;
+      }
     });
   });
 
@@ -231,6 +317,16 @@ function configurarPerfilEConfiguracoes() {
           localStorage.setItem('votaai_contas', JSON.stringify(contas));
         }
 
+        // Atualiza perfil no Firestore se disponível
+        if (db && usuarioLogado.email) {
+          db.collection('usuarios').doc(usuarioLogado.email).set({
+            nome: usuarioLogado.nome,
+            turma: usuarioLogado.turma
+          }, { merge: true }).catch(function(err) {
+            console.warn("Aviso ao salvar perfil no Firestore:", err);
+          });
+        }
+
         exibirDashboard(usuarioLogado);
         alert('Perfil atualizado com sucesso!');
       }
@@ -264,45 +360,63 @@ function renderizarEnquetes(lista) {
   container.innerHTML = '';
 
   if (lista.length === 0) {
-    container.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--text-muted);">' +
-      '<h3>Nenhuma enquete encontrada</h3>' +
-      '<p style="font-size:0.85rem; margin-top:6px;">Clique no botão "+ Nova Enquete" acima para criar a primeira enquete da turma!</p>' +
-    '</div>';
+    container.innerHTML = 
+      '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--text-muted);">' +
+        '<h3>Nenhuma enquete encontrada</h3>' +
+        '<p style="font-size:0.85rem; margin-top:6px;">Clique no botão "+ Nova Enquete" acima para criar a primeira enquete da turma!</p>' +
+      '</div>';
     return;
   }
 
   var usuarioLogado = JSON.parse(localStorage.getItem('votaai_usuario_logado')) || {};
-  var chaveVoto = 'votaai_voted_' + (usuarioLogado.email || 'guest');
+  var userEmail = (usuarioLogado.email || '').trim().toLowerCase();
+  if (!userEmail) {
+    userEmail = localStorage.getItem('votaai_guest_id') || '';
+  }
+  var chaveVoto = 'votaai_voted_' + userEmail;
   var enquetesVotadas = JSON.parse(localStorage.getItem(chaveVoto)) || [];
 
   lista.forEach(function(enquete) {
     var totalVotos = 0;
-    enquete.opcoes.forEach(function(op) { totalVotos += op.votos; });
+    (enquete.opcoes || []).forEach(function(op) { 
+      totalVotos += (Number(op.votos) || 0); 
+    });
 
-    var jaVotou = enquetesVotadas.includes(enquete.id);
-    var statusTexto = enquete.encerrada ? 'Encerrada' : (jaVotou ? 'Voto Registrado' : enquete.tempoRestante + 's');
+    var votantes = enquete.votantes || [];
+    var jaVotou = (userEmail && votantes.includes(userEmail)) || 
+                  enquetesVotadas.includes(String(enquete.id));
+
+    var statusTexto = enquete.encerrada 
+      ? 'Encerrada' 
+      : (jaVotou ? 'Voto Registrado' : (enquete.tempoRestante !== undefined ? enquete.tempoRestante + 's' : 'Ativa'));
+
+    var autorTexto = enquete.criadorNome ? '<span style="font-size:0.75rem;color:var(--text-muted);">por ' + enquete.criadorNome + '</span>' : '';
 
     var htmlCard =
       '<div class="card-enquete" data-id="' + enquete.id + '">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;">' +
-          '<span style="font-size:0.75rem;background:#e2e8f0;padding:2px 8px;border-radius:4px;color:#334155;">' + enquete.categoria + '</span>' +
-          '<span class="tempo-restante" style="font-size:0.8rem;color:#64748b;">' + statusTexto + '</span>' +
+          '<div style="display:flex;align-items:center;gap:8px;">' +
+            '<span style="font-size:0.75rem;background:#e2e8f0;padding:2px 8px;border-radius:4px;color:#334155;font-weight:600;">' + enquete.categoria + '</span>' +
+            autorTexto +
+          '</div>' +
+          '<span class="tempo-restante" style="font-size:0.8rem;color:var(--text-muted);font-weight:600;">' + statusTexto + '</span>' +
         '</div>' +
-        '<h3 style="margin:10px 0;font-size:1rem;">' + enquete.pergunta + '</h3>' +
+        '<h3 style="margin:12px 0 10px 0;font-size:1.05rem;line-height:1.4;">' + enquete.pergunta + '</h3>' +
         '<div class="opcoes-container">';
 
-    enquete.opcoes.forEach(function(opcao, index) {
-      var pct = totalVotos > 0 ? Math.round((opcao.votos / totalVotos) * 100) : 0;
+    (enquete.opcoes || []).forEach(function(opcao, index) {
+      var votosOpcao = Number(opcao.votos) || 0;
+      var pct = totalVotos > 0 ? Math.round((votosOpcao / totalVotos) * 100) : 0;
       var desabilitado = (enquete.encerrada || jaVotou) ? 'disabled' : '';
 
       htmlCard +=
         '<div style="margin-bottom:8px;">' +
-          '<button class="btn-votar" data-opcao="' + index + '" ' + desabilitado + ' style="width:100%;text-align:left;padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">' +
+          '<button class="btn-votar" data-opcao="' + index + '" ' + desabilitado + ' style="width:100%;text-align:left;padding:8px 12px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-card);color:var(--text-main);cursor:' + (desabilitado ? 'default' : 'pointer') + ';display:flex;justify-content:space-between;align-items:center;">' +
             '<span>' + opcao.texto + '</span>' +
-            '<span style="font-size:0.8rem;color:#64748b;">' + pct + '% (' + opcao.votos + 'v)</span>' +
+            '<span style="font-size:0.8rem;color:var(--text-muted);">' + pct + '% (' + votosOpcao + 'v)</span>' +
           '</button>' +
-          '<div style="background:#e2e8f0;border-radius:4px;height:6px;overflow:hidden;margin-top:4px;">' +
-            '<div style="width:' + pct + '%;background:#2563eb;height:100%;"></div>' +
+          '<div style="background:var(--border-color);border-radius:4px;height:6px;overflow:hidden;margin-top:4px;">' +
+            '<div style="width:' + pct + '%;background:var(--primary);height:100%;transition:width 0.3s ease;"></div>' +
           '</div>' +
         '</div>';
     });
@@ -334,40 +448,45 @@ function configurarEventos() {
     link.addEventListener('click', function(e) {
       e.preventDefault();
       categoriaAtiva = this.getAttribute('data-cat');
+
+      document.querySelectorAll('.cat-link').forEach(function(l) {
+        l.classList.remove('active');
+      });
+      this.classList.add('active');
+
       aplicarFiltros();
     });
   });
 
+  // Voto em tempo real
   var listaEnq = document.getElementById('lista-enquetes');
   if (listaEnq) {
-    listaEnq.addEventListener('click', function(e) {
+    listaEnq.addEventListener('click', async function(e) {
       var btn = e.target.closest('.btn-votar');
       if (!btn || btn.disabled) return;
 
       var card = btn.closest('.card-enquete');
-      var idEnquete = parseInt(card.dataset.id, 10);
+      if (!card) return;
+
+      var idEnquete = card.dataset.id;
       var idxOpcao = parseInt(btn.dataset.opcao, 10);
 
-      var usuarioLogado = JSON.parse(localStorage.getItem('votaai_usuario_logado')) || {};
-      var chaveVoto = 'votaai_voted_' + (usuarioLogado.email || 'guest');
-      var enquetesVotadas = JSON.parse(localStorage.getItem(chaveVoto)) || [];
+      // Previne duplo clique imediato
+      btn.disabled = true;
 
-      if (enquetesVotadas.includes(idEnquete)) return;
-
-      var enquete = enquetes.find(function(item) { return item.id === idEnquete; });
-      if (enquete && !enquete.encerrada) {
-        enquete.opcoes[idxOpcao].votos += 1;
-        salvarEnquetes();
-
-        enquetesVotadas.push(idEnquete);
-        localStorage.setItem(chaveVoto, JSON.stringify(enquetesVotadas));
-
-        aplicarFiltros();
-        atualizarTelaResultados();
+      try {
+        var sucesso = await registrarVoto(idEnquete, idxOpcao);
+        if (!sucesso) {
+          btn.disabled = false;
+        }
+      } catch (err) {
+        console.error("Erro ao votar:", err);
+        btn.disabled = false;
       }
     });
   }
 
+  // Adicionar campo de nova opção no modal
   var btnAddOpcao = document.getElementById('btn-add-opcao');
   if (btnAddOpcao) {
     btnAddOpcao.addEventListener('click', function() {
@@ -375,16 +494,18 @@ function configurarEventos() {
       var input = document.createElement('input');
       input.type = 'text';
       input.className = 'opcao-input';
-      input.placeholder = 'Nova Opcao';
+      input.placeholder = 'Nova Opção';
       input.style.marginBottom = '8px';
       container.appendChild(input);
     });
   }
 
+  // Criação de enquete e envio em tempo real
   var formEnq = document.getElementById('form-enquete');
   if (formEnq) {
-    formEnq.addEventListener('submit', function(e) {
+    formEnq.addEventListener('submit', async function(e) {
       e.preventDefault();
+      var btnSubmit = formEnq.querySelector('button[type="submit"]');
       var pergunta = document.getElementById('pergunta').value.trim();
       var categoria = document.getElementById('categoria').value;
       var duracao = parseInt(document.getElementById('duracao').value, 10);
@@ -395,22 +516,47 @@ function configurarEventos() {
       });
 
       if (pergunta.length < 5 || opcoes.length < 2) {
-        alert('Preencha a pergunta e pelo menos 2 alternativas.');
+        alert('Preencha a pergunta (mínimo 5 caracteres) e pelo menos 2 alternativas.');
         return;
       }
 
-      var nova = criarNovaEnquete(pergunta, opcoes, categoria, duracao);
-      iniciarTimerEnquete(nova);
-      aplicarFiltros();
-      atualizarTelaResultados();
+      if (btnSubmit) {
+        btnSubmit.disabled = true;
+        btnSubmit.textContent = 'Enviando...';
+      }
 
-      this.reset();
-      document.getElementById('modal-enquete').style.display = 'none';
+      try {
+        await criarNovaEnquete(pergunta, opcoes, categoria, duracao);
+
+        this.reset();
+        var containerOpcoes = document.getElementById('container-opcoes');
+        if (containerOpcoes) {
+          containerOpcoes.innerHTML = 
+            '<input type="text" class="opcao-input" placeholder="Opção 1" required style="margin-bottom:8px;">' +
+            '<input type="text" class="opcao-input" placeholder="Opção 2" required style="margin-bottom:8px;">';
+        }
+        document.getElementById('modal-enquete').style.display = 'none';
+      } catch (err) {
+        console.error("Erro ao submeter nova enquete:", err);
+      } finally {
+        if (btnSubmit) {
+          btnSubmit.disabled = false;
+          btnSubmit.textContent = 'Criar Enquete';
+        }
+      }
     });
   }
 }
 
+function limparTodosTimers() {
+  for (var id in timersAtivos) {
+    if (timersAtivos[id]) clearInterval(timersAtivos[id]);
+  }
+  timersAtivos = {};
+}
+
 function iniciarTemporizadores() {
+  limparTodosTimers();
   enquetes.forEach(function(enquete) {
     iniciarTimerEnquete(enquete);
   });
@@ -418,25 +564,30 @@ function iniciarTemporizadores() {
 
 function iniciarTimerEnquete(enquete) {
   if (enquete.encerrada) return;
-  if (enquete.intervalId) clearInterval(enquete.intervalId);
+  var id = String(enquete.id);
+  if (timersAtivos[id]) clearInterval(timersAtivos[id]);
 
-  enquete.intervalId = setInterval(function() {
+  timersAtivos[id] = setInterval(function() {
     enquete.tempoRestante -= 1;
-    var card = document.querySelector('.card-enquete[data-id="' + enquete.id + '"]');
+    var card = document.querySelector('.card-enquete[data-id="' + id + '"]');
 
     if (card) {
       var pTempo = card.querySelector('.tempo-restante');
-      if (pTempo && !pTempo.textContent.includes('Voto')) {
+      if (pTempo && !pTempo.textContent.includes('Voto') && !pTempo.textContent.includes('Encerrada')) {
         pTempo.textContent = enquete.tempoRestante + 's';
       }
     }
 
     if (enquete.tempoRestante <= 0) {
-      clearInterval(enquete.intervalId);
+      clearInterval(timersAtivos[id]);
+      delete timersAtivos[id];
       enquete.encerrada = true;
-      salvarEnquetes();
+
+      encerrarEnqueteNoFirestore(id);
       aplicarFiltros();
       atualizarTelaResultados();
     }
   }, 1000);
+}
+
 }

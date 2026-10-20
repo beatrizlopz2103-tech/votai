@@ -1,7 +1,8 @@
-// js/app.js - Inicialização do Aplicativo
+// js/app.js - Inicialização do Aplicativo VotaAí
 document.addEventListener('DOMContentLoaded', function() {
   carregarStatusAPI();
   configurarEventos();
-  aplicarFiltros();
-  iniciarTemporizadores();
+  iniciarSincronizacaoFirestore();
+});
+
 });

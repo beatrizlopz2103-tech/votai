@@ -98,9 +98,19 @@ function carregarEnquetesFallback() {
 
 // Cria uma nova enquete e a envia diretamente ao Firestore
 async function criarNovaEnquete(pergunta, opcoesTextos, categoria, duracao) {
-  var usuarioLogado = JSON.parse(localStorage.getItem('votaai_usuario_logado')) || {};
-  var criadorNome = usuarioLogado.nome || 'Visitante';
-  var criadorEmail = usuarioLogado.email || 'anonimo@votaai.com';
+  var usuarioLogado = JSON.parse(localStorage.getItem('votaai_usuario_logado'));
+  var userAuth = (auth && auth.currentUser) ? auth.currentUser : null;
+
+  // Apenas usuários logados podem criar enquetes
+  if (!userAuth && !usuarioLogado) {
+    alert('Você precisa estar conectado à sua conta para criar uma enquete!');
+    throw new Error('Usuário não autenticado.');
+  }
+
+  var criadorNome = (userAuth && userAuth.displayName) ? userAuth.displayName : 
+                    (usuarioLogado && usuarioLogado.nome ? usuarioLogado.nome : 'Usuário');
+  var criadorEmail = (userAuth && userAuth.email) ? userAuth.email : 
+                     (usuarioLogado && usuarioLogado.email ? usuarioLogado.email : 'usuario@votaai.com');
 
   var novasOpcoes = opcoesTextos.map(function(texto) {
     return { texto: texto, votos: 0 };
@@ -116,6 +126,7 @@ async function criarNovaEnquete(pergunta, opcoesTextos, categoria, duracao) {
     criadoEm: agora,
     criadorNome: criadorNome,
     criadorEmail: criadorEmail,
+    criadorUid: userAuth ? userAuth.uid : (usuarioLogado.uid || null),
     encerrada: false,
     opcoes: novasOpcoes,
     votantes: []
@@ -125,7 +136,7 @@ async function criarNovaEnquete(pergunta, opcoesTextos, categoria, duracao) {
     try {
       var docRef = await db.collection('enquetes').add(novaEnquete);
       novaEnquete.id = docRef.id;
-      // O onSnapshot sincronizará automaticamente a nova enquete para todos os usuários
+      // O onSnapshot sincronizará automaticamente a nova enquete para todos os usuários conectados
       return novaEnquete;
     } catch (erro) {
       console.error("Erro ao adicionar enquete no Firestore:", erro);
@@ -147,19 +158,23 @@ async function criarNovaEnquete(pergunta, opcoesTextos, categoria, duracao) {
   }
 }
 
-// Registra o voto de um usuário na opção escolhida
+// Registra o voto de um usuário na opção escolhida (apenas usuários logados)
 async function registrarVoto(idEnquete, idxOpcao) {
-  var usuarioLogado = JSON.parse(localStorage.getItem('votaai_usuario_logado')) || {};
-  var userIdentifier = (usuarioLogado.email || '').trim().toLowerCase();
+  var usuarioLogado = JSON.parse(localStorage.getItem('votaai_usuario_logado'));
+  var userAuth = (auth && auth.currentUser) ? auth.currentUser : null;
 
-  // Se o usuário não tiver e-mail (por exemplo, visitante), gera um ID único de visitante no dispositivo
+  // Apenas usuários logados podem votar
+  if (!userAuth && !usuarioLogado) {
+    alert('Você precisa entrar na sua conta para votar nesta enquete!');
+    return false;
+  }
+
+  var userIdentifier = (userAuth && userAuth.email) ? userAuth.email.trim().toLowerCase() : 
+                       (usuarioLogado && usuarioLogado.email ? usuarioLogado.email.trim().toLowerCase() : '');
+
   if (!userIdentifier) {
-    var guestId = localStorage.getItem('votaai_guest_id');
-    if (!guestId) {
-      guestId = 'guest_' + Math.random().toString(36).substring(2, 9);
-      localStorage.setItem('votaai_guest_id', guestId);
-    }
-    userIdentifier = guestId;
+    alert('Identificação de usuário necessária para votar.');
+    return false;
   }
 
   var chaveVoto = 'votaai_voted_' + userIdentifier;
@@ -186,7 +201,7 @@ async function registrarVoto(idEnquete, idxOpcao) {
     try {
       var docRef = db.collection('enquetes').doc(String(idEnquete));
 
-      // Uso de transação no Firestore para evitar conflito de votos concorrentes
+      // Uso de transação atômica no Firestore para segurança contra concorrência
       await db.runTransaction(async function(transaction) {
         var doc = await transaction.get(docRef);
         if (!doc.exists) {
@@ -266,6 +281,4 @@ function filtrarEnquetes(termoBusca, categoria) {
     var matchBusca = (enq.pergunta || '').toLowerCase().includes(termo);
     return matchCategoria && matchBusca;
   });
-}
-
 }

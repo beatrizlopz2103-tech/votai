@@ -1,11 +1,11 @@
-// js/api.js - Conexão e Monitoramento de Status com o Firebase Firestore
+// js/api.js - Conexão e Monitoramento de Status com o Firebase (Firestore e Auth)
 
 function atualizarStatusAPI(status, texto) {
   var badge = document.getElementById('api-status');
   if (!badge) return;
 
   if (status === 'conectado') {
-    badge.textContent = texto || 'Firestore Conectado';
+    badge.textContent = texto || 'Firebase Online';
     badge.style.color = '#38bdf8';
   } else if (status === 'sincronizando') {
     badge.textContent = texto || 'Sincronizando...';
@@ -26,14 +26,12 @@ async function carregarStatusAPI() {
   var badge = document.getElementById('api-status');
   if (!badge) return;
 
-  if (typeof db !== 'undefined' && db) {
-    atualizarStatusAPI('sincronizando', 'Conectando Firestore...');
+  if (typeof db !== 'undefined' && db && typeof auth !== 'undefined' && auth) {
+    atualizarStatusAPI('sincronizando', 'Conectando Firebase...');
   } else if (typeof firebaseConfig !== 'undefined' && 
             (firebaseConfig.projectId === 'SEU_PROJECT_ID_AQUI' || firebaseConfig.projectId.includes('SEU_'))) {
     atualizarStatusAPI('aviso', 'Configurar Firebase');
   } else {
     atualizarStatusAPI('modo_local', 'Modo Local (Offline)');
   }
-}
-
 }

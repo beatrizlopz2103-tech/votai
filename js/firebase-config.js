@@ -1,4 +1,4 @@
-// js/firebase-config.js - Configuração e Inicialização do Firebase Firestore
+// js/firebase-config.js - Configuração e Inicialização do Firebase (Firestore e Authentication)
 
 // =========================================================================
 // CREDENCIAIS DO FIREBASE FORNECIDAS PELO PROFESSOR:
@@ -13,8 +13,9 @@ const firebaseConfig = {
   appId: "SEU_APP_ID"
 };
 
-// Instância global do Firestore
+// Instâncias globais do Firebase
 var db = null;
+var auth = null;
 
 try {
   if (typeof firebase !== 'undefined') {
@@ -28,14 +29,14 @@ try {
         firebase.initializeApp(firebaseConfig);
       }
       db = firebase.firestore();
-      console.log("Firebase Firestore inicializado com sucesso!");
+      auth = firebase.auth();
+      console.log("Firebase Firestore e Auth inicializados com sucesso!");
     } else {
-      console.warn("Firebase: Insira as credenciais do seu professor em js/firebase-config.js para ativar a sincronização em tempo real na nuvem.");
+      console.warn("Firebase: Insira as credenciais do seu professor em js/firebase-config.js para ativar o Auth e Firestore.");
     }
   } else {
     console.warn("SDK do Firebase não encontrado. Verifique a importação dos scripts no index.html.");
   }
 } catch (erro) {
-  console.error("Erro ao inicializar Firebase Firestore:", erro);
+  console.error("Erro ao inicializar Firebase:", erro);
 }
-

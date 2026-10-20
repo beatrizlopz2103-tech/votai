@@ -1,4 +1,4 @@
-// js/eventos.js - Lógica Principal, Interface e Interatividade
+// js/eventos.js - Lógica Principal, Interface e Autenticação Firebase
 
 var categoriaAtiva = 'todas';
 var textoBuscaAtivo = '';
@@ -8,6 +8,46 @@ var timersAtivos = {};
 function validarEmail(email) {
   var re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return re.test(String(email).toLowerCase());
+}
+
+function tratarErroAuth(erro) {
+  if (!erro) return;
+  var codigo = erro.code || '';
+  var mensagem = 'Ocorreu um erro na autenticação.';
+
+  switch (codigo) {
+    case 'auth/email-already-in-use':
+      mensagem = 'Este e-mail já está cadastrado no sistema.';
+      break;
+    case 'auth/invalid-email':
+      mensagem = 'O endereço de e-mail informado é inválido.';
+      break;
+    case 'auth/operation-not-allowed':
+      mensagem = 'O provedor de E-mail/Senha não está ativado no Firebase Console.';
+      break;
+    case 'auth/weak-password':
+      mensagem = 'A senha informada é muito fraca. Digite pelo menos 6 caracteres.';
+      break;
+    case 'auth/user-disabled':
+      mensagem = 'Esta conta foi desativada.';
+      break;
+    case 'auth/user-not-found':
+    case 'auth/wrong-password':
+    case 'auth/invalid-credential':
+    case 'auth/invalid-login-credentials':
+      mensagem = 'E-mail ou senha incorretos.';
+      break;
+    case 'auth/too-many-requests':
+      mensagem = 'Muitas tentativas sem sucesso. Aguarde um instante e tente novamente.';
+      break;
+    case 'auth/network-request-failed':
+      mensagem = 'Falha de conexão com a rede. Verifique seu acesso à internet.';
+      break;
+    default:
+      mensagem = erro.message || mensagem;
+  }
+
+  alert(mensagem);
 }
 
 function mudarAbaAuth(tipo) {
@@ -42,170 +82,17 @@ function mudarAbaAuth(tipo) {
   }
 }
 
-function configurarAuth() {
-  var formAuth = document.getElementById('form-auth');
-  var usuarioLogado = JSON.parse(localStorage.getItem('votaai_usuario_logado'));
-
-  if (usuarioLogado) {
-    exibirDashboard(usuarioLogado);
-  }
-
-  // Botão para entrar como visitante sem necessidade de cadastro
-  var btnVisitante = document.getElementById('btn-auth-visitante');
-  if (btnVisitante) {
-    btnVisitante.addEventListener('click', function() {
-      var guestId = localStorage.getItem('votaai_guest_id');
-      if (!guestId) {
-        guestId = 'guest_' + Math.random().toString(36).substring(2, 8);
-        localStorage.setItem('votaai_guest_id', guestId);
-      }
-
-      var contaVisitante = {
-        nome: 'Visitante',
-        email: guestId + '@votaai.local',
-        turma: 'Visitante'
-      };
-
-      localStorage.setItem('votaai_usuario_logado', JSON.stringify(contaVisitante));
-      exibirDashboard(contaVisitante);
-    });
-  }
-
-  if (formAuth) {
-    formAuth.addEventListener('submit', async function(e) {
-      e.preventDefault();
-      var email = document.getElementById('auth-email').value.trim().toLowerCase();
-      var senha = document.getElementById('auth-senha').value.trim();
-      var contas = JSON.parse(localStorage.getItem('votaai_contas')) || [];
-      var btnSubmit = document.getElementById('btn-auth-submit');
-
-      if (!validarEmail(email)) {
-        alert('Por favor, digite um e-mail válido!');
-        return;
-      }
-
-      if (btnSubmit) {
-        btnSubmit.disabled = true;
-        btnSubmit.textContent = 'Aguarde...';
-      }
-
-      try {
-        if (modoAtualAuth === 'criar') {
-          var nome = document.getElementById('auth-nome').value.trim();
-          var turma = document.getElementById('auth-turma').value.trim();
-          var confirma = document.getElementById('auth-confirma-senha').value.trim();
-
-          if (!nome || !email || !senha || !confirma) {
-            alert('Preencha todos os campos!');
-            return;
-          }
-
-          if (senha !== confirma) {
-            alert('As senhas não coincidem!');
-            return;
-          }
-
-          // Se Firestore estiver disponível, verifica se o usuário já existe na nuvem
-          if (db) {
-            try {
-              var userDoc = await db.collection('usuarios').doc(email).get();
-              if (userDoc.exists) {
-                alert('Este e-mail já está cadastrado no sistema!');
-                return;
-              }
-
-              // Salva novo usuário no Firestore
-              await db.collection('usuarios').doc(email).set({
-                nome: nome,
-                email: email,
-                turma: turma,
-                senha: senha,
-                criadoEm: Date.now()
-              });
-            } catch (errDb) {
-              console.warn("Aviso ao salvar usuário no Firestore:", errDb);
-            }
-          } else {
-            var existe = contas.find(function(c) { return c.email === email; });
-            if (existe) {
-              alert('Este e-mail já está cadastrado!');
-              return;
-            }
-          }
-
-          var novaConta = { nome: nome, email: email, turma: turma, senha: senha };
-          contas.push(novaConta);
-          localStorage.setItem('votaai_contas', JSON.stringify(contas));
-          localStorage.setItem('votaai_usuario_logado', JSON.stringify(novaConta));
-
-          exibirDashboard(novaConta);
-        } else {
-          // Modo Entrar
-          var usuarioAutenticado = null;
-
-          // Tenta autenticar via Firestore primeiro
-          if (db) {
-            try {
-              var userDoc = await db.collection('usuarios').doc(email).get();
-              if (userDoc.exists) {
-                var dadosUser = userDoc.data();
-                if (dadosUser.senha === senha) {
-                  usuarioAutenticado = dadosUser;
-                }
-              }
-            } catch (errDb) {
-              console.warn("Aviso ao buscar usuário no Firestore:", errDb);
-            }
-          }
-
-          // Se não encontrou no Firestore ou Firestore offline, busca nas contas locais
-          if (!usuarioAutenticado) {
-            var contaLocal = contas.find(function(c) { return c.email === email && c.senha === senha; });
-            if (contaLocal) {
-              usuarioAutenticado = contaLocal;
-            }
-          }
-
-          if (usuarioAutenticado) {
-            localStorage.setItem('votaai_usuario_logado', JSON.stringify(usuarioAutenticado));
-            exibirDashboard(usuarioAutenticado);
-          } else {
-            alert('E-mail ou senha incorretos!');
-          }
-        }
-      } finally {
-        if (btnSubmit) {
-          btnSubmit.disabled = false;
-          btnSubmit.textContent = (modoAtualAuth === 'criar' ? 'Criar minha conta' : 'Entrar');
-        }
-      }
-    });
-  }
-
-  function fazerLogout() {
-    localStorage.removeItem('votaai_usuario_logado');
-    var dash = document.getElementById('dashboard-app');
-    var auth = document.getElementById('tela-auth');
-    if (dash) dash.style.display = 'none';
-    if (auth) auth.style.display = 'flex';
-  }
-
-  var btnLogout = document.getElementById('btn-logout');
-  if (btnLogout) btnLogout.addEventListener('click', fazerLogout);
-
-  var btnLogoutMob = document.getElementById('btn-logout-mobile');
-  if (btnLogoutMob) {
-    btnLogoutMob.addEventListener('click', function(e) {
-      e.preventDefault();
-      fazerLogout();
-    });
-  }
+function ocultarDashboard() {
+  var dash = document.getElementById('dashboard-app');
+  var authScreen = document.getElementById('tela-auth');
+  if (dash) dash.style.display = 'none';
+  if (authScreen) authScreen.style.display = 'flex';
 }
 
 function exibirDashboard(usuario) {
-  var auth = document.getElementById('tela-auth');
+  var authScreen = document.getElementById('tela-auth');
   var dash = document.getElementById('dashboard-app');
-  if (auth) auth.style.display = 'none';
+  if (authScreen) authScreen.style.display = 'none';
   if (dash) dash.style.display = 'flex';
 
   var elName = document.getElementById('sidebar-user-name');
@@ -228,6 +115,183 @@ function exibirDashboard(usuario) {
 
   aplicarFiltros();
   atualizarTelaResultados();
+}
+
+function configurarAuth() {
+  var formAuth = document.getElementById('form-auth');
+
+  // Monitora alterações no estado de login via Firebase onAuthStateChanged
+  if (typeof auth !== 'undefined' && auth) {
+    auth.onAuthStateChanged(async function(user) {
+      if (user) {
+        var nome = user.displayName || user.email.split('@')[0];
+        var turma = '';
+
+        // Tenta buscar dados complementares no Firestore
+        if (db) {
+          try {
+            var docSnap = await db.collection('usuarios').doc(user.uid).get();
+            if (docSnap.exists) {
+              var dados = docSnap.data();
+              if (dados.nome) nome = dados.nome;
+              if (dados.turma) turma = dados.turma;
+            }
+          } catch (e) {
+            console.warn("Aviso ao carregar dados do usuário no Firestore:", e);
+          }
+        }
+
+        var usuarioAtual = {
+          uid: user.uid,
+          nome: nome,
+          email: user.email,
+          turma: turma
+        };
+
+        localStorage.setItem('votaai_usuario_logado', JSON.stringify(usuarioAtual));
+        exibirDashboard(usuarioAtual);
+      } else {
+        localStorage.removeItem('votaai_usuario_logado');
+        ocultarDashboard();
+      }
+    });
+  } else {
+    // Fallback caso as credenciais do Firebase ainda não tenham sido inseridas
+    var usuarioLogado = JSON.parse(localStorage.getItem('votaai_usuario_logado'));
+    if (usuarioLogado) {
+      exibirDashboard(usuarioLogado);
+    } else {
+      ocultarDashboard();
+    }
+  }
+
+  // Formulário de Cadastro e Login integrado ao Firebase Auth
+  if (formAuth) {
+    formAuth.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      var email = document.getElementById('auth-email').value.trim().toLowerCase();
+      var senha = document.getElementById('auth-senha').value.trim();
+      var btnSubmit = document.getElementById('btn-auth-submit');
+
+      if (!validarEmail(email)) {
+        alert('Por favor, digite um e-mail válido!');
+        return;
+      }
+
+      if (btnSubmit) {
+        btnSubmit.disabled = true;
+        btnSubmit.textContent = 'Processando...';
+      }
+
+      try {
+        if (modoAtualAuth === 'criar') {
+          // CADASTRO NOVO
+          var nome = document.getElementById('auth-nome').value.trim();
+          var turma = document.getElementById('auth-turma').value.trim();
+          var confirma = document.getElementById('auth-confirma-senha').value.trim();
+
+          if (!nome || !email || !senha || !confirma) {
+            alert('Preencha todos os campos!');
+            return;
+          }
+
+          if (senha !== confirma) {
+            alert('As senhas não coincidem!');
+            return;
+          }
+
+          if (senha.length < 6) {
+            alert('A senha deve conter no mínimo 6 caracteres para o Firebase.');
+            return;
+          }
+
+          if (typeof auth !== 'undefined' && auth) {
+            // Firebase Auth: createUserWithEmailAndPassword
+            var userCredential = await auth.createUserWithEmailAndPassword(email, senha);
+            var user = userCredential.user;
+
+            if (user && user.updateProfile) {
+              await user.updateProfile({ displayName: nome });
+            }
+
+            if (db && user) {
+              await db.collection('usuarios').doc(user.uid).set({
+                uid: user.uid,
+                nome: nome,
+                email: email,
+                turma: turma,
+                criadoEm: Date.now()
+              });
+            }
+
+            // O onAuthStateChanged detectará a nova sessão e abrirá o dashboard
+          } else {
+            // Modo local fallback
+            var contas = JSON.parse(localStorage.getItem('votaai_contas')) || [];
+            if (contas.find(function(c) { return c.email === email; })) {
+              alert('Este e-mail já está cadastrado!');
+              return;
+            }
+
+            var novaConta = { nome: nome, email: email, turma: turma, senha: senha };
+            contas.push(novaConta);
+            localStorage.setItem('votaai_contas', JSON.stringify(contas));
+            localStorage.setItem('votaai_usuario_logado', JSON.stringify(novaConta));
+            exibirDashboard(novaConta);
+          }
+        } else {
+          // LOGIN (ENTRAR)
+          if (typeof auth !== 'undefined' && auth) {
+            // Firebase Auth: signInWithEmailAndPassword
+            await auth.signInWithEmailAndPassword(email, senha);
+            // O onAuthStateChanged detectará a sessão autenticada e abrirá o dashboard
+          } else {
+            // Modo local fallback
+            var contas = JSON.parse(localStorage.getItem('votaai_contas')) || [];
+            var contaEncontrada = contas.find(function(c) { return c.email === email && c.senha === senha; });
+            if (contaEncontrada) {
+              localStorage.setItem('votaai_usuario_logado', JSON.stringify(contaEncontrada));
+              exibirDashboard(contaEncontrada);
+            } else {
+              alert('E-mail ou senha incorretos!');
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Erro na autenticação:", error);
+        tratarErroAuth(error);
+      } finally {
+        if (btnSubmit) {
+          btnSubmit.disabled = false;
+          btnSubmit.textContent = (modoAtualAuth === 'criar' ? 'Criar minha conta' : 'Entrar');
+        }
+      }
+    });
+  }
+
+  // Logout via Firebase Auth
+  async function fazerLogout() {
+    if (typeof auth !== 'undefined' && auth) {
+      try {
+        await auth.signOut();
+      } catch (err) {
+        console.error("Erro ao sair da conta:", err);
+      }
+    }
+    localStorage.removeItem('votaai_usuario_logado');
+    ocultarDashboard();
+  }
+
+  var btnLogout = document.getElementById('btn-logout');
+  if (btnLogout) btnLogout.addEventListener('click', fazerLogout);
+
+  var btnLogoutMob = document.getElementById('btn-logout-mobile');
+  if (btnLogoutMob) {
+    btnLogoutMob.addEventListener('click', function(e) {
+      e.preventDefault();
+      fazerLogout();
+    });
+  }
 }
 
 function configurarNavegacao() {
@@ -303,33 +367,38 @@ function configurarPerfilEConfiguracoes() {
   if (formCfg) {
     formCfg.addEventListener('submit', function(e) {
       e.preventDefault();
-      var usuarioLogado = JSON.parse(localStorage.getItem('votaai_usuario_logado'));
-      if (usuarioLogado) {
-        usuarioLogado.nome = document.getElementById('input-nome').value;
-        usuarioLogado.turma = document.getElementById('input-turma').value;
+      var usuarioLogado = JSON.parse(localStorage.getItem('votaai_usuario_logado')) || {};
+      var userAuth = (typeof auth !== 'undefined' && auth && auth.currentUser) ? auth.currentUser : null;
 
-        localStorage.setItem('votaai_usuario_logado', JSON.stringify(usuarioLogado));
+      var inNome = document.getElementById('input-nome').value.trim();
+      var inTurma = document.getElementById('input-turma').value.trim();
 
-        var contas = JSON.parse(localStorage.getItem('votaai_contas')) || [];
-        var idx = contas.findIndex(function(c) { return c.email === usuarioLogado.email; });
-        if (idx !== -1) {
-          contas[idx] = usuarioLogado;
-          localStorage.setItem('votaai_contas', JSON.stringify(contas));
-        }
+      usuarioLogado.nome = inNome;
+      usuarioLogado.turma = inTurma;
+      localStorage.setItem('votaai_usuario_logado', JSON.stringify(usuarioLogado));
 
-        // Atualiza perfil no Firestore se disponível
-        if (db && usuarioLogado.email) {
-          db.collection('usuarios').doc(usuarioLogado.email).set({
-            nome: usuarioLogado.nome,
-            turma: usuarioLogado.turma
-          }, { merge: true }).catch(function(err) {
-            console.warn("Aviso ao salvar perfil no Firestore:", err);
-          });
-        }
-
-        exibirDashboard(usuarioLogado);
-        alert('Perfil atualizado com sucesso!');
+      var contas = JSON.parse(localStorage.getItem('votaai_contas')) || [];
+      var idx = contas.findIndex(function(c) { return c.email === usuarioLogado.email; });
+      if (idx !== -1) {
+        contas[idx] = usuarioLogado;
+        localStorage.setItem('votaai_contas', JSON.stringify(contas));
       }
+
+      if (userAuth) {
+        if (userAuth.updateProfile) {
+          userAuth.updateProfile({ displayName: inNome }).catch(console.warn);
+        }
+        if (db) {
+          db.collection('usuarios').doc(userAuth.uid).set({
+            nome: inNome,
+            turma: inTurma,
+            email: userAuth.email
+          }, { merge: true }).catch(console.warn);
+        }
+      }
+
+      exibirDashboard(usuarioLogado);
+      alert('Perfil atualizado com sucesso!');
     });
   }
 
@@ -368,12 +437,13 @@ function renderizarEnquetes(lista) {
     return;
   }
 
-  var usuarioLogado = JSON.parse(localStorage.getItem('votaai_usuario_logado')) || {};
-  var userEmail = (usuarioLogado.email || '').trim().toLowerCase();
-  if (!userEmail) {
-    userEmail = localStorage.getItem('votaai_guest_id') || '';
-  }
-  var chaveVoto = 'votaai_voted_' + userEmail;
+  var usuarioLogado = JSON.parse(localStorage.getItem('votaai_usuario_logado'));
+  var userAuth = (typeof auth !== 'undefined' && auth && auth.currentUser) ? auth.currentUser : null;
+  var userEmail = (userAuth && userAuth.email) ? userAuth.email.trim().toLowerCase() : 
+                  (usuarioLogado && usuarioLogado.email ? usuarioLogado.email.trim().toLowerCase() : '');
+
+  var estaLogado = Boolean(userAuth || usuarioLogado);
+  var chaveVoto = 'votaai_voted_' + (userEmail || 'none');
   var enquetesVotadas = JSON.parse(localStorage.getItem(chaveVoto)) || [];
 
   lista.forEach(function(enquete) {
@@ -407,7 +477,7 @@ function renderizarEnquetes(lista) {
     (enquete.opcoes || []).forEach(function(opcao, index) {
       var votosOpcao = Number(opcao.votos) || 0;
       var pct = totalVotos > 0 ? Math.round((votosOpcao / totalVotos) * 100) : 0;
-      var desabilitado = (enquete.encerrada || jaVotou) ? 'disabled' : '';
+      var desabilitado = (!estaLogado || enquete.encerrada || jaVotou) ? 'disabled' : '';
 
       htmlCard +=
         '<div style="margin-bottom:8px;">' +
@@ -458,7 +528,7 @@ function configurarEventos() {
     });
   });
 
-  // Voto em tempo real
+  // Voto em tempo real (apenas usuários logados)
   var listaEnq = document.getElementById('lista-enquetes');
   if (listaEnq) {
     listaEnq.addEventListener('click', async function(e) {
@@ -468,10 +538,18 @@ function configurarEventos() {
       var card = btn.closest('.card-enquete');
       if (!card) return;
 
+      var usuarioLogado = JSON.parse(localStorage.getItem('votaai_usuario_logado'));
+      var userAuth = (typeof auth !== 'undefined' && auth && auth.currentUser) ? auth.currentUser : null;
+
+      if (!userAuth && !usuarioLogado) {
+        alert('Você precisa estar logado na sua conta para votar!');
+        ocultarDashboard();
+        return;
+      }
+
       var idEnquete = card.dataset.id;
       var idxOpcao = parseInt(btn.dataset.opcao, 10);
 
-      // Previne duplo clique imediato
       btn.disabled = true;
 
       try {
@@ -500,11 +578,22 @@ function configurarEventos() {
     });
   }
 
-  // Criação de enquete e envio em tempo real
+  // Criação de enquete (apenas usuários logados)
   var formEnq = document.getElementById('form-enquete');
   if (formEnq) {
     formEnq.addEventListener('submit', async function(e) {
       e.preventDefault();
+
+      var usuarioLogado = JSON.parse(localStorage.getItem('votaai_usuario_logado'));
+      var userAuth = (typeof auth !== 'undefined' && auth && auth.currentUser) ? auth.currentUser : null;
+
+      if (!userAuth && !usuarioLogado) {
+        alert('Você precisa estar logado na sua conta para criar uma enquete!');
+        document.getElementById('modal-enquete').style.display = 'none';
+        ocultarDashboard();
+        return;
+      }
+
       var btnSubmit = formEnq.querySelector('button[type="submit"]');
       var pergunta = document.getElementById('pergunta').value.trim();
       var categoria = document.getElementById('categoria').value;
@@ -588,6 +677,4 @@ function iniciarTimerEnquete(enquete) {
       atualizarTelaResultados();
     }
   }, 1000);
-}
-
 }

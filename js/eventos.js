@@ -513,9 +513,13 @@ function renderizarEnquetes(lista) {
 
   if (lista.length === 0) {
     container.innerHTML = 
-      '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--text-muted);">' +
+      '<div class="card-empty-state">' +
+        '<div class="empty-icon-circle">' +
+          '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>' +
+        '</div>' +
         '<h3>Nenhuma enquete encontrada</h3>' +
-        '<p style="font-size:0.85rem; margin-top:6px;">Clique no botão "+ Nova Enquete" acima para criar a primeira enquete da turma!</p>' +
+        '<p style="font-size:0.85rem; margin-top:4px;">Seja o primeiro a criar uma enquete para a turma votar agora mesmo!</p>' +
+        '<button type="button" class="btn-primary" onclick="document.getElementById(\'modal-enquete\').style.display=\'flex\'" style="margin-top:12px;padding:9px 18px;font-size:0.85rem;">+ Criar Enquete</button>' +
       '</div>';
     return;
   }

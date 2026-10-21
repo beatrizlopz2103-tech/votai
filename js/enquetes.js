@@ -68,14 +68,18 @@ function iniciarSincronizacaoFirestore() {
         iniciarTemporizadores();
       }
     }, function(erro) {
-      console.error("Erro na sincronização em tempo real do Firestore:", erro);
+      console.warn("Aviso na sincronização em tempo real do Firestore:", erro);
       if (typeof atualizarStatusAPI === 'function') {
-        atualizarStatusAPI('erro', 'Erro Firestore');
+        if (erro.code === 'permission-denied') {
+          atualizarStatusAPI('aviso', 'Regras Bloqueadas');
+        } else {
+          atualizarStatusAPI('erro', 'Erro Firestore');
+        }
       }
       carregarEnquetesFallback();
     });
   } else {
-    // Caso o Firebase ainda não esteja conectado
+    // Caso o Firestore ainda não esteja ativo
     carregarEnquetesFallback();
   }
 }
@@ -99,7 +103,7 @@ function carregarEnquetesFallback() {
 // Cria uma nova enquete e a envia diretamente ao Firestore
 async function criarNovaEnquete(pergunta, opcoesTextos, categoria, duracao) {
   var usuarioLogado = JSON.parse(localStorage.getItem('votaai_usuario_logado'));
-  var userAuth = (auth && auth.currentUser) ? auth.currentUser : null;
+  var userAuth = (typeof auth !== 'undefined' && auth && auth.currentUser) ? auth.currentUser : null;
 
   // Apenas usuários logados podem criar enquetes
   if (!userAuth && !usuarioLogado) {
@@ -111,6 +115,7 @@ async function criarNovaEnquete(pergunta, opcoesTextos, categoria, duracao) {
                     (usuarioLogado && usuarioLogado.nome ? usuarioLogado.nome : 'Usuário');
   var criadorEmail = (userAuth && userAuth.email) ? userAuth.email : 
                      (usuarioLogado && usuarioLogado.email ? usuarioLogado.email : 'usuario@votaai.com');
+  var criadorUid = userAuth ? userAuth.uid : (usuarioLogado.uid || null);
 
   var novasOpcoes = opcoesTextos.map(function(texto) {
     return { texto: texto, votos: 0 };
@@ -126,7 +131,7 @@ async function criarNovaEnquete(pergunta, opcoesTextos, categoria, duracao) {
     criadoEm: agora,
     criadorNome: criadorNome,
     criadorEmail: criadorEmail,
-    criadorUid: userAuth ? userAuth.uid : (usuarioLogado.uid || null),
+    criadorUid: criadorUid,
     encerrada: false,
     opcoes: novasOpcoes,
     votantes: []
@@ -140,8 +145,21 @@ async function criarNovaEnquete(pergunta, opcoesTextos, categoria, duracao) {
       return novaEnquete;
     } catch (erro) {
       console.error("Erro ao adicionar enquete no Firestore:", erro);
-      alert("Erro ao salvar enquete no Firebase: " + erro.message);
-      throw erro;
+      if (erro.code === 'permission-denied') {
+        alert("Aviso de Permissão do Firestore: Acesso negado pelas Regras de Segurança do Firebase.\n\nPara que todos vejam na nuvem, libere as Regras de Segurança no painel do Firebase.");
+      } else {
+        alert("Erro ao salvar enquete no Firebase: " + erro.message);
+      }
+
+      // Salva localmente como segurança para não perder os dados
+      novaEnquete.id = 'local_' + agora;
+      novaEnquete.tempoRestante = duracaoNum;
+      enquetes.unshift(novaEnquete);
+      salvarEnquetesLocal();
+      if (typeof aplicarFiltros === 'function') aplicarFiltros();
+      if (typeof atualizarTelaResultados === 'function') atualizarTelaResultados();
+      if (typeof iniciarTimerEnquete === 'function') iniciarTimerEnquete(novaEnquete);
+      return novaEnquete;
     }
   } else {
     // Fallback local se o Firebase não estiver configurado
@@ -161,7 +179,7 @@ async function criarNovaEnquete(pergunta, opcoesTextos, categoria, duracao) {
 // Registra o voto de um usuário na opção escolhida (apenas usuários logados)
 async function registrarVoto(idEnquete, idxOpcao) {
   var usuarioLogado = JSON.parse(localStorage.getItem('votaai_usuario_logado'));
-  var userAuth = (auth && auth.currentUser) ? auth.currentUser : null;
+  var userAuth = (typeof auth !== 'undefined' && auth && auth.currentUser) ? auth.currentUser : null;
 
   // Apenas usuários logados podem votar
   if (!userAuth && !usuarioLogado) {
@@ -197,7 +215,7 @@ async function registrarVoto(idEnquete, idxOpcao) {
     }
   }
 
-  if (db) {
+  if (db && !String(idEnquete).startsWith('local_')) {
     try {
       var docRef = db.collection('enquetes').doc(String(idEnquete));
 
@@ -238,11 +256,27 @@ async function registrarVoto(idEnquete, idxOpcao) {
       return true;
     } catch (erro) {
       console.error("Erro ao registrar voto no Firestore:", erro);
-      alert(erro.message || "Erro ao registrar voto.");
+      if (erro.code === 'permission-denied') {
+        alert("Aviso de Regras do Firestore: Permissão negada ao salvar voto no servidor.\n(Voto computado localmente nesta sessão).");
+      } else {
+        alert(erro.message || "Erro ao registrar voto.");
+      }
+
+      // Fallback local se falhar por permissão
+      if (enquete && !enquete.encerrada) {
+        enquete.opcoes[idxOpcao].votos = (enquete.opcoes[idxOpcao].votos || 0) + 1;
+        if (!enquete.votantes) enquete.votantes = [];
+        enquete.votantes.push(userIdentifier);
+        salvarEnquetesLocal();
+        enquetesVotadas.push(String(idEnquete));
+        localStorage.setItem(chaveVoto, JSON.stringify(enquetesVotadas));
+        if (typeof aplicarFiltros === 'function') aplicarFiltros();
+        if (typeof atualizarTelaResultados === 'function') atualizarTelaResultados();
+      }
       return false;
     }
   } else {
-    // Fallback local se o Firebase não estiver ativo
+    // Fallback local se o Firebase não estiver ativo ou for enquete local
     if (enquete && !enquete.encerrada) {
       enquete.opcoes[idxOpcao].votos = (enquete.opcoes[idxOpcao].votos || 0) + 1;
       if (!enquete.votantes) enquete.votantes = [];
@@ -262,7 +296,7 @@ async function registrarVoto(idEnquete, idxOpcao) {
 
 // Marca a enquete como encerrada no Firestore quando o tempo expira
 async function encerrarEnqueteNoFirestore(idEnquete) {
-  if (db && idEnquete) {
+  if (db && idEnquete && !String(idEnquete).startsWith('local_')) {
     try {
       await db.collection('enquetes').doc(String(idEnquete)).update({
         encerrada: true

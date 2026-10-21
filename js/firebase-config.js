@@ -5,12 +5,12 @@
 // Substitua os campos abaixo pelos dados do projeto Firebase do seu professor.
 // =========================================================================
 const firebaseConfig = {
-  apiKey: "SUA_API_KEY_AQUI",
-  authDomain: "SEU_PROJETO.firebaseapp.com",
-  projectId: "SEU_PROJECT_ID_AQUI",
-  storageBucket: "SEU_PROJETO.appspot.com",
-  messagingSenderId: "SEU_MESSAGING_SENDER_ID",
-  appId: "SEU_APP_ID"
+  apiKey: "AIzaSyBQrXFZegU2gf7yco3hjJzt9UDXiFvnK4o",
+  authDomain: "projeto-votaai.firebaseapp.com",
+  projectId: "projeto-votaai",
+  storageBucket: "projeto-votaai.firebasestorage.app",
+  messagingSenderId: "847787569678",
+  appId: "1:847787569678:web:f5254c462316da78e6425f"
 };
 
 // Instâncias globais do Firebase

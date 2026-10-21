@@ -117,11 +117,86 @@ function exibirDashboard(usuario) {
   atualizarTelaResultados();
 }
 
+// =========================================================================
+// FUNÇÃO TEMPORÁRIA DE TESTE (Item 3 do pedido)
+// Cadastra e autentica automaticamente o usuário teste@votaai.com / 123456
+// =========================================================================
+window.cadastrarUsuarioTeste = async function() {
+  var emailTeste = "teste@votaai.com";
+  var senhaTeste = "123456";
+  var nomeTeste = "Usuário Teste";
+  var turmaTeste = "3º Ano B";
+
+  console.log("-> [Teste] Iniciando verificação do usuário de teste:", emailTeste);
+
+  if (typeof auth !== 'undefined' && auth) {
+    try {
+      var userCredential = null;
+      try {
+        userCredential = await auth.createUserWithEmailAndPassword(emailTeste, senhaTeste);
+        console.log("-> [Teste] Usuário criado com sucesso no Firebase Auth! UID:", userCredential.user.uid);
+      } catch (errCreate) {
+        if (errCreate.code === 'auth/email-already-in-use') {
+          console.log("-> [Teste] Usuário já existia no Firebase Auth. Autenticando com senha...");
+          userCredential = await auth.signInWithEmailAndPassword(emailTeste, senhaTeste);
+          console.log("-> [Teste] Login efetuado com sucesso! UID:", userCredential.user.uid);
+        } else {
+          throw errCreate;
+        }
+      }
+
+      var user = userCredential.user;
+
+      // Atualiza displayName no Auth
+      if (user && user.updateProfile) {
+        await user.updateProfile({ displayName: nomeTeste });
+      }
+
+      // Salva dados no Firestore
+      if (db && user) {
+        try {
+          await db.collection('usuarios').doc(user.uid).set({
+            uid: user.uid,
+            nome: nomeTeste,
+            email: emailTeste,
+            turma: turmaTeste,
+            criadoEm: Date.now()
+          }, { merge: true });
+          console.log("-> [Teste] Dados do usuário salvos com sucesso no Firestore (coleção 'usuarios')!");
+        } catch (dbErr) {
+          console.warn("-> [Teste] Aviso ao gravar no Firestore:", dbErr.message);
+        }
+      }
+
+      alert("Usuário de teste autenticado com sucesso!\n\nE-mail: " + emailTeste + "\nSenha: " + senhaTeste);
+      return user;
+    } catch (err) {
+      console.error("-> [Teste] Erro ao cadastrar/logar usuário de teste:", err);
+      alert("Erro ao testar Firebase Auth: " + err.message);
+    }
+  } else {
+    alert("Firebase Auth não está inicializado. Verifique as credenciais em js/firebase-config.js");
+  }
+};
+
 function configurarAuth() {
   var formAuth = document.getElementById('form-auth');
 
-  // Monitora alterações no estado de login via Firebase onAuthStateChanged
+  // Recupera sessão local prévia para evitar piscar tela de login ao atualizar a página
+  var sessaoSalva = JSON.parse(localStorage.getItem('votaai_usuario_logado'));
+  if (sessaoSalva) {
+    exibirDashboard(sessaoSalva);
+  }
+
+  // Monitora alterações de login/logout via Firebase onAuthStateChanged
   if (typeof auth !== 'undefined' && auth) {
+    // Garante que a persistência seja local e mantida
+    if (auth.setPersistence && firebase.auth.Auth.Persistence) {
+      auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(function(err) {
+        console.warn("Persistência local:", err);
+      });
+    }
+
     auth.onAuthStateChanged(async function(user) {
       if (user) {
         var nome = user.displayName || user.email.split('@')[0];
@@ -137,7 +212,7 @@ function configurarAuth() {
               if (dados.turma) turma = dados.turma;
             }
           } catch (e) {
-            console.warn("Aviso ao carregar dados do usuário no Firestore:", e);
+            console.warn("Aviso ao carregar dados do usuário no Firestore:", e.message);
           }
         }
 
@@ -148,6 +223,7 @@ function configurarAuth() {
           turma: turma
         };
 
+        // Mantém o estado no localStorage
         localStorage.setItem('votaai_usuario_logado', JSON.stringify(usuarioAtual));
         exibirDashboard(usuarioAtual);
       } else {
@@ -155,14 +231,21 @@ function configurarAuth() {
         ocultarDashboard();
       }
     });
-  } else {
-    // Fallback caso as credenciais do Firebase ainda não tenham sido inseridas
-    var usuarioLogado = JSON.parse(localStorage.getItem('votaai_usuario_logado'));
-    if (usuarioLogado) {
-      exibirDashboard(usuarioLogado);
-    } else {
-      ocultarDashboard();
-    }
+  }
+
+  // Botão/Link para preencher com dados de teste
+  var linkTeste = document.getElementById('link-usuario-teste');
+  if (linkTeste) {
+    linkTeste.addEventListener('click', function(e) {
+      e.preventDefault();
+      var inEmail = document.getElementById('auth-email');
+      var inSenha = document.getElementById('auth-senha');
+      if (inEmail) inEmail.value = 'teste@votaai.com';
+      if (inSenha) inSenha.value = '123456';
+      
+      // Executa o teste diretamente
+      window.cadastrarUsuarioTeste();
+    });
   }
 
   // Formulário de Cadastro e Login integrado ao Firebase Auth
@@ -185,7 +268,7 @@ function configurarAuth() {
 
       try {
         if (modoAtualAuth === 'criar') {
-          // CADASTRO NOVO
+          // CADASTRO NOVO COM createUserWithEmailAndPassword
           var nome = document.getElementById('auth-nome').value.trim();
           var turma = document.getElementById('auth-turma').value.trim();
           var confirma = document.getElementById('auth-confirma-senha').value.trim();
@@ -206,7 +289,6 @@ function configurarAuth() {
           }
 
           if (typeof auth !== 'undefined' && auth) {
-            // Firebase Auth: createUserWithEmailAndPassword
             var userCredential = await auth.createUserWithEmailAndPassword(email, senha);
             var user = userCredential.user;
 
@@ -215,18 +297,21 @@ function configurarAuth() {
             }
 
             if (db && user) {
-              await db.collection('usuarios').doc(user.uid).set({
-                uid: user.uid,
-                nome: nome,
-                email: email,
-                turma: turma,
-                criadoEm: Date.now()
-              });
+              try {
+                await db.collection('usuarios').doc(user.uid).set({
+                  uid: user.uid,
+                  nome: nome,
+                  email: email,
+                  turma: turma,
+                  criadoEm: Date.now()
+                });
+              } catch (dbErr) {
+                console.warn("Aviso ao salvar no Firestore:", dbErr.message);
+              }
             }
 
             // O onAuthStateChanged detectará a nova sessão e abrirá o dashboard
           } else {
-            // Modo local fallback
             var contas = JSON.parse(localStorage.getItem('votaai_contas')) || [];
             if (contas.find(function(c) { return c.email === email; })) {
               alert('Este e-mail já está cadastrado!');
@@ -240,13 +325,11 @@ function configurarAuth() {
             exibirDashboard(novaConta);
           }
         } else {
-          // LOGIN (ENTRAR)
+          // LOGIN COM signInWithEmailAndPassword
           if (typeof auth !== 'undefined' && auth) {
-            // Firebase Auth: signInWithEmailAndPassword
             await auth.signInWithEmailAndPassword(email, senha);
             // O onAuthStateChanged detectará a sessão autenticada e abrirá o dashboard
           } else {
-            // Modo local fallback
             var contas = JSON.parse(localStorage.getItem('votaai_contas')) || [];
             var contaEncontrada = contas.find(function(c) { return c.email === email && c.senha === senha; });
             if (contaEncontrada) {
